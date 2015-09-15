@@ -501,4 +501,163 @@ var ref = function (value) {
 	    // the sum is here
 	});
 
+#Part 5 安全性和稳定性
+
+另外一个可以优化的地方那个是我们要确保在将来调用中能和callback和errback的注册顺序保持一致。这将极大减少异步变成中的流程控制的步骤，考虑下面一个简单的例子:
+	
+	var blah = function () {
+	    var result = foob().then(function () {
+	        return barf();
+	    });
+	    var barf = function () {
+	        return 10;
+	    };
+	    return result;
+	};
+
+这个函数可能抛出一个错误或者返回一个立即被执行的promise，其参数是完全执行后返回的10。blah能否正确执行依赖`foob()`是否在同一个事件轮询或将来某个时间点中被resolve了。如果result返回的promise中的回调将来执行，那么将一直是成功的。
+
+###`PS`
+> 这段话看的我晕乎乎的，不知道啥意思。大概琢磨是如果blah返回的promise中，如果callback能确保将来的轮询中执行
+> 那么回调将一直能成功返回
+
+
+	var enqueue = function (callback) {
+	    //process.nextTick(callback); // NodeJS
+	    setTimeout(callback, 1); // Naïve browser solution
+	};
+	
+	var defer = function () {
+	    var pending = [], value;
+	    return {
+	        resolve: function (_value) {
+	            if (pending) {
+	                value = ref(_value);
+	                for (var i = 0, ii = pending.length; i < ii; i++) {
+	                    // XXX
+	                    enqueue(function () {
+	                        value.then.apply(value, pending[i]);
+							//这种写法其实是有问题的，i始终返回pending.length
+	                    });  
+	                }
+	                pending = undefined;
+	            }
+	        },
+	        promise: {
+	            then: function (_callback, _errback) {
+	                var result = defer();
+	                _callback = _callback || function (value) {
+	                    return value;
+	                };
+	                _errback = _errback || function (reason) {
+	                    return reject(reason);
+	                };
+	                var callback = function (value) {
+	                    result.resolve(_callback(value));
+	                };
+	                var errback = function (reason) {
+	                    result.resolve(_errback(reason));
+	                };
+	                if (pending) {
+	                    pending.push([callback, errback]);
+	                } else {
+	                    // XXX
+	                    enqueue(function () {
+	                        value.then(callback, errback);
+	                    });
+	                }
+	                return result.promise;
+	            }
+	        }
+	    };
+	};
+	
+	var ref = function (value) {
+	    if (value && value.then)
+	        return value;
+	    return {
+	        then: function (callback) {
+	            var result = defer();
+	            // XXX
+	            enqueue(function () {
+	                result.resolve(callback(value));
+	            });
+	            return result.promise;
+	        }
+	    };
+	};
+	
+	var reject = function (reason) {
+	    return {
+	        then: function (callback, errback) {
+	            var result = defer();
+	            // XXX
+	            enqueue(function () {
+	                result.resolve(errback(reason));
+	            });
+	            return result.promise;
+	        }
+	    };
+	};
+
+这里仍旧有一些安全性的问题；假设任何一个具有`then`方法的对象都被当作promise来处理，那么直接调用`then`方法可能有意向不到的‘收获’。
+
+- callback或者errback必须以同样的顺序被调用
+- callback或者errback可能会被同时调用
+- callback或者errback可能会被调用多次
+
+用`when`方法封装下promise以此阻止错误发生
+
+所以我们封装callback和errback以便任何的异常都能被转移到出错的机制里去
+
+
+
+	var when = function (value, _callback, _errback) {
+	    var result = defer();
+	    var done;
+	
+	    _callback = _callback || function (value) {
+	        return value;
+	    };
+	    _errback = _errback || function (reason) {
+	        return reject(reason);
+	    };
+	
+	    var callback = function (value) {
+	        try {
+	            return _callback(value);
+	        } catch (reason) {
+	            return reject(reason);
+	        }
+	    };
+	    var errback = function (reason) {
+	        try {
+	            return _errback(reason);
+	        } catch (reason) {
+	            return reject(reason);
+	        }
+	    };
+	
+	    enqueue(function () {
+	        ref(value).then(function (value) {
+	            if (done)
+	                return;
+	            done = true;
+	            result.resolve(ref(value).then(callback, errback));
+	        }, function (reason) {
+	            if (done)
+	                return;
+	            done = true;
+	            result.resolve(errback(reason));
+	        });
+	    });
+	
+	    return result.promise;
+	};
+
+到这里，我们的方案能确保不会有哪些突发性的错误，包括哪些非必需的事件流控制，并且也能使callback和errback各自保持独立。
+
+###Part 5 消息传递
+
+
 
