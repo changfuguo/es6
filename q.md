@@ -163,7 +163,7 @@ would be ignored.  It's also possible that you do not want the workers to know w
 
 综上所述，defer要能同时处理 多种 resolution 和observation
 
-#part 3 
+#part 3 进阶
 
 该设计中两个独立的两部分引入了一些变量。第一部分使得分离和组合`deferred`的`resolve`和`promise`变得非常容易。同时也使得我们很容易区分`promise`和其他值。
 
@@ -333,6 +333,8 @@ var ref = function (value) {
 	                for (var i = 0, ii = pending.length; i < ii; i++) {
 	                    var callback = pending[i];
 	                    value.then(callback); // then called instead
+						//奇妙之处在这里，上述then可能是ref.then可能是defer.promise.then，不管是那个两者都接受一个回调
+						//一个是用来处理value 一个用来驱动下一个resolve
 	                }
 	                pending = undefined;
 	            }
@@ -357,12 +359,146 @@ var ref = function (value) {
 	    };
 	};
 
+这里用可thenable的promise来分离deferred的‘promise’和‘resolve’部分
 
 
 
+#Part 4 错误传播
+
+为实现错误传播，我们再次引入errback。我们需要一种类似于`ref`类型的新型promise，就像promise完全执行时调用callback一样，它会告知errback拒绝执行以及拒绝的原因。
+
+	var reject = function (reason) {
+	    return {
+	        then: function (callback, errback) {
+	            return ref(errback(reason));
+	        }
+	    };
+	};
+
+这是监听有立即返回拒绝值的最简单的办法
+
+	reject("Meh.").then(function (value) {
+	    // we never get here
+	}, function (reason) {
+	    // reason === "Meh."
+	});
+
+
+这里可以利用promise的API重新引入errback
+
+	var maybeOneOneSecondLater = function (callback, errback) {
+	    var result = defer();
+	    setTimeout(function () {
+	        if (Math.random() < .5) {
+	            result.resolve(1);
+	        } else {
+	            result.resolve(reject("Can't provide one."));
+	        }
+	    }, 1000);
+	    return result.promise;
+	};
+
+### `PS`
+> 1. reject的也用resolve来返回的，其实是不合理的，之前作者也说了职责分明吗
+> 2. reject里接受两个参数，但是实际上只用了errback也是不合理的
+
+为了使上面的例子能工作，defer系统需要一个新的管道，使得能同时处理callback和errback。所以pending将被设计为可以同时传入callback和errback作为`then`方法回调的参数
 
 
 
+	
+	var defer = function () {
+	    var pending = [], value;
+	    return {
+	        resolve: function (_value) {
+	            if (pending) {
+	                value = ref(_value);
+	                for (var i = 0, ii = pending.length; i < ii; i++) {
+	                    // apply the pending arguments to "then"
+	                    value.then.apply(value, pending[i]);
+	                }
+	                pending = undefined;
+	            }
+	        },
+	        promise: {
+	            then: function (_callback, _errback) {
+	                var result = defer();
+	                var callback = function (value) {
+	                    result.resolve(_callback(value));
+	                };
+	                var errback = function (reason) {
+	                    result.resolve(_errback(reason));
+	                };
+	                if (pending) {
+	                    pending.push([callback, errback]);
+	                } else {
+	                    value.then(callback, errback);
+	                }
+	                return result.promise;
+	            }
+	        }
+	    };
+	};
 
+
+但是，这个版本的defer仍旧有些小问题：errback必须在调用then方法时提供，或者调用一个不存在的errback时，会抛出错误。最简单的办法是提供默认的回调，以便能传递拒绝的行为。如果你仅仅对监控错误感兴趣，那么忽略错误的回调也是合理的（PS：个人立即，不捕捉出错，但是出错的时候别中断程序），所以我们提供一个回调一遍程序能完全执行。
+	
+	var defer = function () {
+	    var pending = [], value;
+	    return {
+	        resolve: function (_value) {
+	            if (pending) {
+	                value = ref(_value);
+	                for (var i = 0, ii = pending.length; i < ii; i++) {
+	                    value.then.apply(value, pending[i]);
+	                }
+	                pending = undefined;
+	            }
+	        },
+	        promise: {
+	            then: function (_callback, _errback) {
+	                var result = defer();
+	                // provide default callbacks and errbacks
+	                _callback = _callback || function (value) {
+	                    // by default, forward fulfillment
+	                    return value;
+	                };
+	                _errback = _errback || function (reason) {
+	                    // by default, forward rejection
+	                    return reject(reason);
+	                };
+	                var callback = function (value) {
+	                    result.resolve(_callback(value));
+	                };
+	                var errback = function (reason) {
+	                    result.resolve(_errback(reason));
+	                };
+	                if (pending) {
+	                    pending.push([callback, errback]);
+	                } else {
+	                    value.then(callback, errback);
+	                }
+	                return result.promise;
+	            }
+	        }
+	    };
+	};
+
+
+到这里，我们已经实现隐式的错误传播。我们现在能很容易的从并行或者串行的promise中创建新的promise。下面的例子实现了从求和的promise中创建一个新的promise
+
+
+	promises.reduce(function (accumulating, promise) {
+	    return accumulating.then(function (accumulated) {
+	        return promise.then(function (value) {
+	            return accumulated + value;
+	        });
+	    });
+	}, ref(0)) 
+	//将带有值为0的promise传递到reduce里，返回的promise就是accumulating，0的值指向accumulated
+	//在内部将值传递给了promise，来说实现求和
+	.then(function (sum) {
+	    // the sum is here
+	});
 
 
