@@ -655,9 +655,154 @@ var ref = function (value) {
 	    return result.promise;
 	};
 
+
 到这里，我们的方案能确保不会有哪些突发性的错误，包括哪些非必需的事件流控制，并且也能使callback和errback各自保持独立。
+
+
+
 
 ###Part 5 消息传递
 
+现在来看，promise变成一个有then方法的对象。Deferred promises 负责传递消息给他们具体的 promise。完全执行的promise通过将完全执行后的值传递给callback来进行消息传递。拒绝类型promise通过传递给errback拒绝的原因来实现消息相应。
+
+由此一般地我们认为promise应该是能接受任意消息的对象，包括`then/when`消息。对于有大量的非立即返回的监听来说非常有用的,就像是promise可以被看作是另外一个金星或者worker或者网络上的另一台计算机。
+如果我们等待一个网络完全执行完返回的消息值，这个往返的过程可能会浪费掉很多时间。这归结于‘非正式’的网络协议，也是SOAP和RPC逐渐衰落的原因。
 
 
+尽管如此，我们可以在一个远程的promise被resolve之前发送一个消息，远程promise在成功执行之后能立即返回相应消息。考虑一般情况是，一个对象可能被存放在远程服务器上，自身不能通过网络传输。它有一些内在的状态和能力以至于不能被序列化，如访问数据库。假设我们现在能从这个对象获取到一个promise并且可以发送消息。这些消息很可能有诸如`query`之类的方法构成，这些方法能以此发送反馈的promise。
+
+所以我们构建一套新的promise，这套promise基于一些能发送任意消息的方法之上。`CommonJS/Promises/D`中定义`promiseSend`方法。发送一个`when`类型消息等同于调用`then`方法
+
+	promise.then(callback, errback);
+	promise.promiseSend("when", callback, errback);
+
+我们必须重新审视我们所有的方法，用`promiseSend`方法代替`then`方法进行构建。但是，我们不会完全放弃`then`方法的形式，我们仍旧能处理`thenable`类型的promise，只是在内部还是调用`promiseSend`而已。
+
+
+	function Promise() {}
+	Promise.prototype.then = function (callback, errback) {
+	    return when(this, callback, errback);
+	};
+
+如果promise不能识别出消息的类型（例如 when），他肯定返回一个最终将被拒绝的promise
+
+能接受任意的消息以为这可以执行作为远程promise代理的新型promise，，可以把所有消息发送到远程的promise并且本地的promise能否处理远程promise的响应值
+
+
+对于上述的用例代理层和未被确认的消息来说，创建一种抽象的promise是非常有用的：它只负责将认识的消息传递给能够处理的对象，未确认的消息传给错误的回调来进行处理。
+
+
+	var makePromise = function (handler, fallback) {
+	//是一个抽象方法，生成promise
+	    var promise = new Promise();
+	    handler = handler || {};
+	    fallback = fallback || function (op) {
+	        return reject("Can't " + op);
+	    };
+	    promise.promiseSend = function (op, callback) {
+	        var args = Array.prototype.slice.call(arguments, 2);
+	        var result;
+	        callback = callback || function (value) {return value};
+	        if (handler[op]) {
+	            result = handler[op].apply(handler, args);
+	        } else {
+	            result = fallback.apply(handler, [op].concat(args));
+	        }
+	        return callback(result);
+	    };
+	    return promise;
+	};
+
+
+期望handler 的每一个方法以及fallback方法能返回一个可以传入callback的值。handler本身不接受任何操作符的名字，但是fallback需要接受操作符以便进行路由操作，同时多余的参数也被传入进去。
+
+对于ref方法，我们仍强制将其返回值转化为promise。我们把`thenables`方法固化到`promiseSend`，在完全执行的返回值上我们提供了一些基本的交互行为，包括属性操作和方法回调
+	
+	var reject = function (reason) {
+	    var forward = function (reason) {
+	        return reject(reason);
+	    };
+	    return makePromise({
+	        when: function (errback) {
+	            errback = errback || forward;
+	            return errback(reason);
+	        }
+	    }, forward);
+	};
+
+这套defer仍有瑕疵。我们取代数组传参给`then`方法，进而使用"promiseSend"、"makePromise" 和"when"来处理callback和errback的默认参数和封装。
+
+
+var defer = function () {
+    var pending = [], value;
+    return {
+        resolve: function (_value) {
+            if (pending) {
+                value = ref(_value);
+                for (var i = 0, ii = pending.length; i < ii; i++) {
+                    enqueue(function () {
+                        value.promiseSend.apply(value, pending[i]);
+                    });
+                }
+                pending = undefined;
+            }
+        },
+        promise: {
+            promiseSend: function () {
+                var args = Array.prototype.slice.call(arguments);
+                var result = defer();
+                if (pending) {
+                    pending.push(args);
+                } else {
+                    enqueue(function () {
+                        value.promiseSend.apply(value, args);
+                    });
+                }
+            }
+        }
+    };
+};
+
+最后一步是在语法上向promise发送消息更加便捷，我们创建了 "get", "put", "post" and "del" 能发送相应的消息并且从返回结果中取得相应promise。他们看起来如此相似
+
+ 
+	
+	var get = function (object, name) {
+	    var result = defer();
+	    ref(object).promiseSend("get", result.resolve, name);
+	    return result.promise;
+	};
+	
+	get({"a": 10}, "a").then(function (ten) {
+	    // ten === ten
+	});
+	
+
+最后一步是将promise提升至‘状态艺术的层面’，所有成功的回调都使用win，所有失败的回调都使用tail，留给读者自己实践
+
+
+
+#part 6  Future
+
+
+
+Andrew Sutherland did a great exercise in creating a variation of the Q
+library that supported annotations so that waterfalls of promise creation,
+resolution, and dependencies could be graphically depicited.  Optional
+annotations and a debug variation of the Q library would be a logical
+next-step.
+
+There remains some question about how to ideally cancel a promise.  At the
+moment, a secondary channel would have to be used to send the abort message.
+This requires further research.
+
+CommonJS/Promises/A also supports progress notification callbacks.  A
+variation of this library that supports implicit composition and propagation
+of progress information would be very awesome.
+
+It is a common pattern that remote objects have a fixed set of methods, all
+of which return promises.  For those cases, it is a common pattern to create
+a local object that proxies for the remote object by forwarding all of its
+method calls to the remote object using "post".  The construction of such
+proxies could be automated.  Lazy-Arrays are certainly one use-case.
+ 
