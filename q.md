@@ -1,7 +1,7 @@
 > 英文水平有限，只是对q的库做了翻译，加了自己一些解释，见原文 [https://github.com/kriskowal/q/tree/v1/design](https://github.com/kriskowal/q/tree/v1/design "desing");下文中有PS的是我加上的哈~
 
 #Part 1
-----
+
 本文试图解释promises是如何工作的，通过逐步构建一个promise库揭示它为什么能以一种特别的方式进行工作，最后向读者展示了它的主要设计思想。
 
 假设你正在写一个不能立即有返回值的function。通常的API是提供一个回调函数将返回的值传入到回调函数中，而不是立即返回一个值。
@@ -31,7 +31,7 @@
 
 
 #Part 2 promise
-----
+
 考虑一个能替代直接返回值或者直接抛出错误的一般方法，函数直接返回一个对象，该对象等同于最后函数的返回值，有可能成功或者失败。这个对象就是promise，从名字上可以看出，最终这些个promise是要被resolve掉的。我们可以调用promise上的函数来观察它是否完全执行还是拒绝执行。如果promise被拒绝了，且拒绝的行为没有被明显的观察到，那么在promise链上的其他promise也会由于同样的原因而拒绝执行。（PS：个人理解，一旦当前出错了，该错误会一直向下抛出，直到某一个errcall把他接住处理）
 
 在这个迭代的设计过程当中，我们设计一个具有`then`方法的promise模型，通过该方法，我们能注册回调。
@@ -717,7 +717,39 @@ var ref = function (value) {
 期望handler 的每一个方法以及fallback方法能返回一个可以传入callback的值。handler本身不接受任何操作符的名字，但是fallback需要接受操作符以便进行路由操作，同时多余的参数也被传入进去。
 
 对于ref方法，我们仍强制将其返回值转化为promise。我们把`thenables`方法固化到`promiseSend`，在完全执行的返回值上我们提供了一些基本的交互行为，包括属性操作和方法回调
-	
+
+		var ref = function (object) {
+	    if (object && typeof object.promiseSend !== "undefined") {
+	        return object;
+	    }
+	    if (object && typeof object.then !== "undefined") {
+	        return makePromise({
+	            when: function () {
+	                var result = defer();
+	                object.then(result.resolve, result.reject);
+	                return result;
+	            }
+	        }, function fallback(op) {
+	            return Q.when(object, function (object) {
+	                return Q.ref(object).promiseSend.apply(object, arguments);
+	            });
+	        });
+	    }
+	    return makePromise({
+	        when: function () {
+	            return object;
+	        },
+	        get: function (name) {
+	            return object[name];
+	        },
+	        put: function (name, value) {
+	            object[name] = value;
+	        },
+	        del: function (name) {
+	            delete object[name];
+	        }
+	    }); 
+	};
 	var reject = function (reason) {
 	    var forward = function (reason) {
 	        return reject(reason);
@@ -783,8 +815,7 @@ var defer = function () {
 
 
 #part 6  Future
-
-
+### `PS`
 
 Andrew Sutherland did a great exercise in creating a variation of the Q
 library that supported annotations so that waterfalls of promise creation,
@@ -792,17 +823,9 @@ resolution, and dependencies could be graphically depicited.  Optional
 annotations and a debug variation of the Q library would be a logical
 next-step.
 
-There remains some question about how to ideally cancel a promise.  At the
-moment, a secondary channel would have to be used to send the abort message.
-This requires further research.
+如何取消promise方面仍旧存在一些个问题。可能需要一个辅助的通道来发送被废弃的消息，这个在将来有待实践。
+CommonJS/Promises/A 已经能支持进度回调通知。通过改造Q库使之能支持隐式的组合和进度消息的传播也是极好的。
 
-CommonJS/Promises/A also supports progress notification callbacks.  A
-variation of this library that supports implicit composition and propagation
-of progress information would be very awesome.
-
-It is a common pattern that remote objects have a fixed set of methods, all
-of which return promises.  For those cases, it is a common pattern to create
-a local object that proxies for the remote object by forwarding all of its
-method calls to the remote object using "post".  The construction of such
-proxies could be automated.  Lazy-Arrays are certainly one use-case.
+对于严惩对象来说，他们会内置一些方法，这些方法返回promise。对于代理远程对象的本地对象来说，普遍的做法是使用post方法来执行本地对象的方法。这种代理结构可以被自动安装设置。懒数组的方法一定会是其中一个。
+ 
  
