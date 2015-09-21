@@ -6,3 +6,9 @@
 2. aaaa
 3. asdfadsf
 4. 
+
+```js
+function () {
+  var name ="test";
+}
+```
