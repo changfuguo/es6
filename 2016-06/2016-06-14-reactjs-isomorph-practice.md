@@ -174,22 +174,6 @@ new webpack.DefinePlugin({
 ```
 if(__DEV__) {
 
-  	let chokidar = require('chokidar');
-  	let watcher = chokidar.watch(['./lib/server.js']);
-  	let debugpath = require('path');
-		watcher.on('ready', () => {
-	  	watcher.on('all', (event, path) =>{
-		    console.log("Clearing /server/ module cache from server");
-		    console.log(event + ':' + path)
-		    var fullPath = debugpath.resolve(__dirname, path);
-		    if(require.cache[fullPath] && fullPath.endsWith('lib/server.js')) {
-		    	console.log(`exist ${fullPath}`)
-		    	delete require.cache[fullPath];
-
-		    	require(fullPath);
-		    }
-	  	});
-	});
     let webpackConfig = null;
     webpackConfig = require('./webpack.config.dev')(config);
     const compiler = webpack(webpackConfig)
@@ -218,13 +202,198 @@ if(__DEV__) {
 
 5，服务端开发
 
-尝鲜作祟，现在的larkjs未能全面支持es6特性，为了能使用到这些新特性和client保持一致；所以服务端的代码也需要编译，这个编译过程放到gulp中编译；由于lark的对mvc代码在加载的时候已经将上下文保存起来，要实现服务端的热更新，只能watch完之后只能重启服务，**这样做导致前端页面的数据状态丢失，需要刷新页面**。
+尝鲜作祟，现在的larkjs未能全面支持es6特性，采用babel编译为了能使用到这些新特性和client保持一致；所以服务端的代码也需要编译，这个编译过程放到gulp中编译；由于lark的对mvc代码在加载的时候已经将上下文保存起来，要实现服务端的热更新，只能watch完之后只能重启服务，**这样做导致前端页面的数据状态丢失，需要刷新页面**。
 
 
   这里注意的是，larkjs自动加载models和controller中的文件，并用之前的module.exports导出，这里如果用es的export default 形式导出的话，会报找不到模块哟，所以导出的还沿用之前的写法
   
- 
+  另外一个需要注意的是对于服务端渲染的处理需要注意以下几个方面
+  
+1) 处理除js以外的静态资源，用__BROWSER__变量解决module报错
+
+2）文件变更之后用gulp的watch监控，将重新打包的代码放到node服务中编译重新加载，这里服务端reactRender的代码server.js：
+
+```
+'use strict';
+
+import React from 'react'
+import {renderToString} from 'react-dom/server'
+import { match, RouterContext } from 'react-router'
+import { Provider } from 'react-redux'
+import routes from './routes'
+import configureStore from './store/configureStore'
 
 
+const render = function(stateData, ctx) {
 
+	return new Promise((resolve, reject) =>{
+		try{
+			match({routes, location: ctx.originalUrl }, (err, redirect, props) => {
+				const store = configureStore(stateData);
+				const state = store.getState();
+				let html = '';
+				try{
+					html += renderToString(
+						<Provider store={store} key="provider">
+							<RouterContext {...props}/>
+						</Provider>
+					);
+				} catch(err) {
+					console.log('render error:' + err)
+				}
+				console.log(html)
+				if (err) {
+					reject('server render error');
+				} else {
+					resolve({html, state});
+				}
+			});
+		}catch(err){
+			console.log(err)
+		}
+	});
+	
+}
+
+exports.default = global.renderReact = render;
+
+```
+
+将renderReact挂到全局下，当不同路由进来结合react-router进行路由同构
+
+3）当前端业务代码更改后，需要在服务端重新加载；此时之前的代码已经require过，需要在启动当前服务的时候进行监控编译后的server.js，将其从require.cache中删除，重新挂载新的代码，过程描述如下：
+
+gulp.watch监控->文件更改->重新编译server.js->cp代码到当前服务中->node服务监控服务中server.js代码发生更改，删除require.cache中旧的文件->重新require新的server.js
+
+server.js重新编译的代码如下
+
+```
+if(__DEV__) {
+
+  	let chokidar = require('chokidar');
+  	let watcher = chokidar.watch(['./lib/server.js']);
+  	let debugpath = require('path');
+		watcher.on('ready', () => {
+	  	watcher.on('all', (event, path) =>{
+		    console.log("Clearing /server/ module cache from server");
+		    console.log(event + ':' + path)
+		    var fullPath = debugpath.resolve(__dirname, path);
+		    if(require.cache[fullPath] && fullPath.endsWith('lib/server.js')) {
+		    	console.log(`exist ${fullPath}`)
+		    	delete require.cache[fullPath];
+		    	require(fullPath);
+		    }
+	  	});
+	});
+}
+```
+
+这个做法有一点美中不足,**serve.js重新编译和HMR重新分发应该是有个先后顺序，应该是先将编译后的server.js挂到node中去，再触发HMR的下发，这个我没仔细研究，两者顺序不能保证，一旦server.js先编译，没问题；一旦server.js后挂载，则当HMR下发代码的时候会报错，钱后端渲染的HTML不一致***，报如下错误：
+
+	React attempted to reuse markup in a container but the checksum was invalid. This generally means that you are using server rendering and the markup generated on the server was not what the client was expecting. React injected new markup to compensate which works but you have lost many of the benefits of server rendering. Instead, figure out why the markup being generated is different on the client or server:
+	
+4）服务端es7的async/await不能使用，lark的框架本身支持到yield，用async/await方法babel到es2015之后不兼容，555，所以保留lark本身的function *的写法
+
+6、前后端路由同构
+
+前后端路由同构实现起来比较容易，前端配置路由的时候需要配置成和后端路由一样，都是手动配置，写代码的时候注意就行了，这里采用的的是服务端给数据的方式到server.js中定义的reactRender方法，进行服务端渲染，
+
+服务端的路由采取了，自动加载的办法，不过按照larkjs的实现方法有点ugly，larkjs的controller直接在module.exports中定义，参数为koa-router，当前counter.js的路由为文件名为基准，router.get('/getlist',function *(){}),对应的路由为'counter/getlist'
+
+对lark的路由进行了简单的封装，如下的controller控制的路由我/counter/index对应下面ActionIndex函数，只不过为了衔接lark的路由控制，实现起来有点ugly
+
+```
+'use strict';
+
+class CounterController extends BaseController{
+
+	constructor(){
+		super(true)
+	}
+
+	* ActionIndex(ctx) {
+		return new Promise( (resolve, reject) =>{
+			resolve({counter: 330})
+		})
+	}
+
+	*Action(ctx) {
+		return new Promise( (resolve, reject) =>{
+			resolve({counter: 33000})
+		})
+	}
+	
+}
+
+module.exports = function (router) {
+	new CounterController().route(router)
+}
+
+```
+
+这样做有一个缺点，**按照lark的路由定义方式，可以实现'/counter/:name'这种带参数的理由匹配**，因为我为了自动映射后端路由到前端路由，函数命名规则不能有':name'的命名，要是非要这么实现类似正则的路由匹配，也只能用CounterController.prototype['index/:name']的命名方式，个人认为不是号的方法，具体后面再研究
+
+
+7、开发和上线构建
+
+这里开发环境方便调，在client端需要服务端配合HMR功能，dev环境下把watch到的代码直接生成到可访问的目的地。直出的server.js需要watch并在node端进行热替换。对于服务端的热更新，watch到之后直接重启吧
+
+build的时候直接将代码build到dist里去，并打包。
+
+上线的时候结合build.sh进行解压
+
+代码戳这里[carmaintain](https://github.com/changfuguo/carmaintain)
+## 三、后续
+
+总结下出现的几个问题
+
+1）server.js需要解决摘除css的静态代码，否则报错
+
+2) 优化，体积过大问题，目前的代码是个示例代码，打包的vendor压缩后200多k，业务代码几十K，继续优化
+
+3）路由同构实现类似正则的路由，目前需要进一步实践，最差的就走配置吧
+
+4）异步加载，也即[code splitting]()
+
+```
+require.ensure(["./firstScript.js"], function(require) {
+});
+```
+## 四、参考
+
+1. [react-redux-starter-kit](https://github.com/davezuko/react-redux-starter-kit)
+
+2. [react-redux-universal-hot-example
+express
+](https://github.com/erikras/react-redux-universal-hot-example
+express)
+
+3. [react-webpack-node](github.com/mxstbr/react-boilerplate)
+
+4. [react-webpack-node](https://github.com/choonkending/react-webpack-node)
+
+5. [为 Koa 框架封装 webpack-dev-middleware 中间件](http://www.tuicool.com/articles/MruEni)
+
+
+6. [深入理解 react-router 路由系统
+](https://zhuanlan.zhihu.com/p/20381597)
+
+
+7. [mirror-web-isomorphic](https://github.com/CQUPTMirror/mirror-web-isomorphic/)
+
+8. [webpack-your-bags](https://blog.madewithlove.be/post/webpack-your-bags/)
+
+9. [reduce-your-bundle-js-file-size](https://lacke.mn/reduce-your-bundle-js-file-size/)
+
+10. [React.js 2016 最佳实践](http://www.tuicool.com/articles/jiQnuqj)
+
+
+11. [FIS3 、ROLLUP、webpack比较](https://zhuanlan.zhihu.com/p/20933749)
+
+12. [后端同构三部曲](http://jlongster.com/Backend-Apps-with-Webpack--Part-III)
+
+
+13. [isomorphic-react-in-real-life](https://reactjsnews.com/isomorphic-react-in-real-life)
+
+14. [react-tutorial-cloning-yelp](https://www.fullstackreact.com/articles/react-tutorial-cloning-yelp/)
 
