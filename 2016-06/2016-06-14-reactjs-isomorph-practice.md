@@ -83,7 +83,148 @@ fis是我用过的构建工具了感觉最爽的一个，所有的资源都是�
 ![后端架构](https://cloud.githubusercontent.com/assets/15227832/10685018/e628db9c-7986-11e5-93bc-2dc1f0b871fd.png)
 
 
-从上面可以看出在实践reactjs过程当中，结合自身的业务
+从上面可以看出在实践reactjs过程当中，结合自身的业务，实现了前后端同构，是一个很好的实践，不过当时没参与，接下来我就梳理下自己的思路，对于react本身我也是刚刚入门，demo是照搬的，主要的技术点如下
+
+1、react生态
+
+. redux:单向数据流管理
+
+. react-redux:react和redux结合
+
+. react-router:路由管理
+
+. redux-thunk:可以让你愉快的dispatch，官方解释如下
+
+Redux Thunk middleware allows you to write action creators that return a function instead of an action. The thunk can be used to delay the dispatch of an action, or to dispatch only if a certain condition is met. The inner function receives the store methods dispatch and getState as parameters.
+
+简单解释可以返回一个action处理的函数非单纯的action，延迟dispatch或者有条件的dispatch，大白话就是异步dispatch
+
+.react-dom: 解决服务端直出时模拟render时的上下文出错用的 
+
+
+上面是react前端涉及的几个组件，有人说store树会随着项目越来越大变的臃肿，有人提出immutable.js扁平化管理，本次暂不做尝试
+
+2、node生态
+
+node现成的框架express、KOA已经集成了开发所需要的大部分功能，中间价相对比较完善。和[妈咪特卖](mami.baidu.com)的一样，采用组内larkjs，其在koa的基础上，划分出来了con
+
+controller以及pageservice、dataservice以及daoservice，目录结构清晰，约定的路由及可复用的model层极大方便了开发效率，目前支持es6的generator
+
+![](https://raw.githubusercontent.com/changfuguo/es6/master/2016-06/2016-06-14-reactjs-isomorph-practice/node-art.png)
+
+
+3、服务端渲染
+
+为了更好的seo，进行服务端直出。服务端直出在之前的项目里对css以及其他静态资源的打包是通过gulp实现的，但是为了更好的利用webpack的HMR模块，这里对css走webpack的loader；这样引申出来一个问题，服务端直出的js由于编译后不再和静态资源处于一个目录，那么client端require的css，则会找不到module，运行server端的脚本会报如下错误：（当然，你绝对可以通过gulp来打包css及其它静态资源，没有什么不好，仅仅是丢失了HMR特性而已）
+
+![](https://raw.githubusercontent.com/changfuguo/es6/master/2016-06/2016-06-14-reactjs-isomorph-practice/can-not-find-module.png)
+
+
+查阅了好多资料，找到一个[iamdustan](https://twitter.com/iamdustan/status/577561601353465856),[Backend-Apps-with-Webpack](http://jlongster.com/Backend-Apps-with-Webpack--Part-I)给出的解决办法如下,在webpack的配置中增加如下插件
+
+```
+plugins:[
+        	new webpack.IgnorePlugin(/\.(css|scss)$/),
+        	new webpack.NormalModuleReplacementPlugin(/\.(css|scss)$/, 'node-noop')
+        ],
+        
+```
+但是实验之后无果，依然报错。
+
+最终的解决办法采用这个哥们的办法[isomorphic-react-in-real-life](https://reactjsnews.com/isomorphic-react-in-real-life):在webpack打包的时候传入一些指示是服务端还是浏览器端执行的变量，如上图中所示：
+
+```
+if(process.env.__BROWSER__) {
+	require('./index.scss')
+}
+```
+在client的webpack打包配置如下:
+
+```
+new webpack.DefinePlugin({
+	            "process.env": {
+	            	'NODE_ENV' : JSON.stringify('development'),
+	            	'__BROWSER__': JSON.stringify(true)
+	            }
+	        })
+	        
+```
+
+而在服务端的配置则不处理__BROWSER__变量，注意这里**require**是运行时加载的，所以该分之在服务端不会执行，避免了找不到模块的错误；
+
+但是这样一来，你就不能用[css modules](https://github.com/css-modules/css-modules)的一些特性了，至少是不能全盘使用了，具体可参考上述连接
+
+好，服务端问题over了，来看下HMR
+
+4、HMR（hot module replacement）
+
+这个特性之前是在研究react-native时发现的，当时就觉得惊呆了，有木有！无丢失状态、无需手动刷新，瞬间觉得效率提高了有没有；查阅资料的时候发现在reactjs有过几种热更新的方式
+
+.webpack-dev-server: 
+
+	参考 [webpack-dev-server](http://webpack.github.io/docs/webpack-dev-server.html),[Webpack-dev-server结合后端服务器的热替换配置](http://www.jianshu.com/p/8adf4c2bfa51) ,需要配合 [react-hot-loader](http://gaearon.github.io/react-hot-loader/getstarted/)实现
+
+ 	缺点：这种方式需要开双服务！！！
+ 
+.webpack-hot-middleware + webpack-dev-middleware 
+
+	直接集成到node的后台服务，以中间价 形式接入hot的请求，配置如下
+			
+
+```
+if(__DEV__) {
+
+  	let chokidar = require('chokidar');
+  	let watcher = chokidar.watch(['./lib/server.js']);
+  	let debugpath = require('path');
+		watcher.on('ready', () => {
+	  	watcher.on('all', (event, path) =>{
+		    console.log("Clearing /server/ module cache from server");
+		    console.log(event + ':' + path)
+		    var fullPath = debugpath.resolve(__dirname, path);
+		    if(require.cache[fullPath] && fullPath.endsWith('lib/server.js')) {
+		    	console.log(`exist ${fullPath}`)
+		    	delete require.cache[fullPath];
+
+		    	require(fullPath);
+		    }
+	  	});
+	});
+    let webpackConfig = null;
+    webpackConfig = require('./webpack.config.dev')(config);
+    const compiler = webpack(webpackConfig)
+    app.use(webpackDevMiddleware(compiler, { 
+      stats: {
+        color: true
+      },
+      inline:true,
+      lazy:false,
+      hot: true,
+      noInfo: true, 
+      publicPath: webpackConfig.output.publicPath,
+      headers: {'Access-Control-Allow-Origin': '*'},
+      //contentBase: "http://" + config.server_host + ':' + config.server_port,
+      quiet: true
+    }))
+    app.use(webpackHotMiddleware(compiler),{
+    	heartbeat: 20 * 1000
+    });
+} 
+
+```
+
+这种方式可以将HMR以中间件的形式插入到当前dev的服务中去，爽歪歪
+
+
+5，服务端开发
+
+尝鲜作祟，现在的larkjs未能全面支持es6特性，为了能使用到这些新特性和client保持一致；所以服务端的代码也需要编译，这个编译过程放到gulp中编译；由于lark的对mvc代码在加载的时候已经将上下文保存起来，要实现服务端的热更新，只能watch完之后只能重启服务，**这样做导致前端页面的数据状态丢失，需要刷新页面**。
+
+
+  这里注意的是，larkjs自动加载models和controller中的文件，并用之前的module.exports导出，这里如果用es的export default 形式导出的话，会报找不到模块哟，所以导出的还沿用之前的写法
+  
+ 
+
 
 
 
