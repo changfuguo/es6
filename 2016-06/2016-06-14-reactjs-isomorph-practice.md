@@ -163,7 +163,7 @@ new webpack.DefinePlugin({
 
 .webpack-dev-server: 
 
-	参考 [webpack-dev-server](http://webpack.github.io/docs/webpack-dev-server.html),[Webpack-dev-server结合后端服务器的热替换配置](http://www.jianshu.com/p/8adf4c2bfa51) ,需要配合 [react-hot-loader](http://gaearon.github.io/react-hot-loader/getstarted/)实现
+参考 [webpack-dev-server](http://webpack.github.io/docs/webpack-dev-server.html),[Webpack-dev-server结合后端服务器的热替换配置](http://www.jianshu.com/p/8adf4c2bfa51) ,需要配合 [react-hot-loader](http://gaearon.github.io/react-hot-loader/getstarted/)实现
 
  	
  **缺点：这种方式需要开双服务！！！**
