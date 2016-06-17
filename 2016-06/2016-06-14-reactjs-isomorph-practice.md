@@ -7,7 +7,7 @@
 
 之前的项目中分别用过backbone和angular；
 
-backbone是接触的第一个mvc的框架，瞬间原来那种无组织无纪律的写法，通过一种规范化的表达得到了改善，目录结构明了；但由于约束相对较少，所以需要自己创建大量model和collection完成业务逻辑，对视图和路由也需要额外处理；其数据和代码的绑定，也只能通过model的set/get方式来触发，如下
+backbone是接触的第一个mvc的框架，瞬间原来那种无组织无纪律的写法，通过一种规范化的表达得到了改善，目录结构明了；但由于约束相对较少，所以需要自己创建大量model和collection完成业务逻辑，对视图和路由也需要额外处理；其数据和视图的绑定，也只能通过model的set/get方式来触发，如下
 
 ```
 （"change:sourceProperty, this.recalculateComputedProperty）
