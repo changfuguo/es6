@@ -7,7 +7,7 @@
 
 之前的项目中分别用过backbone和angular；
 
-backbone是接触的第一个mvc的框架，瞬间原来那种无组织无纪律的写法，通过一种规范化的表达得到了改善，目录结构明了；但由于约束相对较少，所以需要自己创建大量model和collection完成业务逻辑，对视图和路由也需要额外处理；其数据和代码的绑定，也只能通过model的set/get方式来触发，如下
+backbone是接触的第一个mvc的框架，瞬间原来那种无组织无纪律的写法，通过一种规范化的表达得到了改善，目录结构明了；但由于约束相对较少，所以需要自己创建大量model和collection完成业务逻辑，对视图和路由也需要额外处理；其数据和视图的绑定，也只能通过model的set/get方式来触发，如下
 
 ```
 （"change:sourceProperty, this.recalculateComputedProperty）
@@ -163,7 +163,7 @@ new webpack.DefinePlugin({
 
 .webpack-dev-server: 
 
-	参考 [webpack-dev-server](http://webpack.github.io/docs/webpack-dev-server.html),[Webpack-dev-server结合后端服务器的热替换配置](http://www.jianshu.com/p/8adf4c2bfa51) ,需要配合 [react-hot-loader](http://gaearon.github.io/react-hot-loader/getstarted/)实现
+参考 [webpack-dev-server](http://webpack.github.io/docs/webpack-dev-server.html),[Webpack-dev-server结合后端服务器的热替换配置](http://www.jianshu.com/p/8adf4c2bfa51) ,需要配合 [react-hot-loader](http://gaearon.github.io/react-hot-loader/getstarted/)实现
 
  	
  **缺点：这种方式需要开双服务！！！**
@@ -363,8 +363,7 @@ require.ensure(["./firstScript.js"], function(require) {
 });
 ```
 
-***最后的一个总结是：不要痴迷于框架或者工具本身，好的框架或者工具对开发效率和简化流程是必要的。但是最核心的东西是你如何连接你擅长的工具到具体的业务中去。通用的东西如dom操作、cookie等通用的业务，更重要的是如何将具体业务以组件形式编写和组织起来，这才是前端的核心工作，工具只是更好的方便的让你写业务代码*
-***
+***最后的一个总结是：不要痴迷于框架或者工具本身，好的框架或者工具对开发效率和简化流程是必要的。但是最核心的东西是你如何连接你擅长的工具到具体的业务中去。除了如dom操作、cookie等通用的业务，更重要的是如何更好的用工具将具体业务以组件形式编写和组织起来，这才是前端的核心工作，记住：工具只是更好的方便的让你写业务代码****
 ## 四、参考
 
 1. [react-redux-starter-kit](https://github.com/davezuko/react-redux-starter-kit)
